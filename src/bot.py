@@ -7,7 +7,7 @@ from discord.ext import tasks
 
 from config import ENV, DISCORD_TOKEN, DEV_GUILD_ID, LOG_LEVEL, SYNC_COMMANDS, CLEAR_COMMANDS
 from storage.db import init_db, get_connection
-from helpers import default_max_slots
+from helpers import default_max_slots, build_event_announcement_content
 from embeds import build_signup_embed
 from views import SignupView
 from commands import register_commands
@@ -28,6 +28,7 @@ class MyClient(discord.Client):
                 guild = discord.Object(id=int(DEV_GUILD_ID))
                 if CLEAR_COMMANDS:
                     self.tree.clear_commands(guild=guild)
+                self.tree.copy_global_to(guild=guild)
                 await self.tree.sync(guild=guild)
             else:
                 await self.tree.sync()
@@ -112,10 +113,10 @@ async def scheduler_loop():
                     INSERT INTO events (
                         schedule_id,
                         guild_id, channel_id, creator_id,
-                        title, category, signup_mode, max_slots,
-                        timestamp, created_at
+                        title, category, duration, signup_mode, max_slots,
+                        timestamp, ping_roles, announcement_message, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         row["id"],
@@ -124,9 +125,12 @@ async def scheduler_loop():
                         row["creator_id"],
                         row["title"],
                         row["category"],
+                        row["duration"],
                         signup_mode,
                         max_slots,
                         next_run,
+                        int(bool(row["ping_roles"])),
+                        row["announcement_message"],
                         now_ts
                     ),
                 )
@@ -148,6 +152,7 @@ async def scheduler_loop():
                     title=row["title"],
                     category=row["category"],
                     timestamp=next_run,
+                    duration=row["duration"],
                     signup_mode=signup_mode,
                     max_slots=max_slots,
                     creator_id=row["creator_id"],
@@ -155,7 +160,21 @@ async def scheduler_loop():
                     allowed_role_ids=allowed_role_ids,
                     schedule_id=row["id"],
                 )
-                message = await channel.send(embed=embed, view=SignupView(event_id))
+                content = build_event_announcement_content(
+                    ping_roles=bool(row["ping_roles"]) and signup_mode == "role",
+                    allowed_role_ids=allowed_role_ids,
+                    message=row["announcement_message"],
+                )
+                message = await channel.send(
+                    content=content,
+                    embed=embed,
+                    view=SignupView(event_id),
+                    allowed_mentions=discord.AllowedMentions(
+                        roles=bool(row["ping_roles"]) and signup_mode == "role",
+                        users=False,
+                        everyone=False,
+                    ),
+                )
                 await message.create_thread(name=f"{row['title']} Discussion")
 
         conn.commit()

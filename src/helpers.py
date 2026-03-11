@@ -82,9 +82,38 @@ async def send_invalid_timestamp(interaction: discord.Interaction) -> None:
     )
 
 
+def normalize_announcement_message(message: str | None) -> str | None:
+    if message is None:
+        return None
+    normalized = message.strip()
+    return normalized or None
+
+
+def build_event_announcement_content(
+    *,
+    ping_roles: bool,
+    allowed_role_ids: list[int] | None,
+    message: str | None,
+) -> str | None:
+    parts: list[str] = []
+
+    if ping_roles and allowed_role_ids:
+        parts.append(" ".join(f"<@&{role_id}>" for role_id in allowed_role_ids))
+
+    normalized_message = normalize_announcement_message(message)
+    if normalized_message:
+        parts.append(normalized_message)
+
+    if not parts:
+        return None
+
+    return "\n".join(parts)
+
+
 async def insert_schedule(*, interaction, title, category, frequency, interval_value,
                           day_of_week, time_ts, start_ts, end_ts, next_run_at,
-                          signup_mode, allowed_role_ids):
+                          duration,
+                          signup_mode, allowed_role_ids, ping_roles, announcement_message):
     now_ts = int(datetime.now(tz=timezone.utc).timestamp())
     conn = get_connection()
     try:
@@ -93,12 +122,13 @@ async def insert_schedule(*, interaction, title, category, frequency, interval_v
             INSERT INTO schedules (
                 guild_id, channel_id, creator_id,
                 title, category,
+                duration,
                 frequency, interval, day_of_week,
                 time_of_day, start_date, end_date,
-                signup_mode,
+                signup_mode, ping_roles, announcement_message,
                 created_at, next_run_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 interaction.guild_id,
@@ -106,6 +136,7 @@ async def insert_schedule(*, interaction, title, category, frequency, interval_v
                 interaction.user.id,
                 title,
                 category,
+                duration,
                 frequency,
                 interval_value,
                 day_of_week,
@@ -113,6 +144,8 @@ async def insert_schedule(*, interaction, title, category, frequency, interval_v
                 start_ts,
                 end_ts,
                 signup_mode.lower(),
+                int(ping_roles),
+                announcement_message,
                 now_ts,
                 next_run_at,
             ),

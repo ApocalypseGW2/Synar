@@ -1,0 +1,2 @@
+ALTER TABLE events ADD COLUMN ping_roles INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE events ADD COLUMN announcement_message TEXT;

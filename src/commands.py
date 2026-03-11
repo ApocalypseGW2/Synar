@@ -4,7 +4,13 @@ import discord
 from discord import app_commands
 
 from storage.db import get_connection
-from helpers import parse_unix_timestamp, default_max_slots, send_invalid_timestamp
+from helpers import (
+    parse_unix_timestamp,
+    default_max_slots,
+    send_invalid_timestamp,
+    normalize_announcement_message,
+    build_event_announcement_content,
+)
 from embeds import build_signup_embed
 from views import SignupView, EventRolePickerView, ScheduleIntervalView, ScheduleEditRolePickerView
 
@@ -22,29 +28,47 @@ create = app_commands.Group(name="create", description="Create events and schedu
     title="Title of the event",
     category="Type of event",
     timestamp="Date of the event (Unix timestamp)",
+    duration="Planned duration (in hours) shown in the signup embed",
     signup_mode="Restrictions for users to sign up",
+    ping_roles="Ping the allowed roles in the event post",
+    message="Optional text shown above the signup embed",
 )
 async def create_event(
     interaction: discord.Interaction,
     title: str,
     category: Literal["Raids", "Dungeons", "Fractals", "Other"],
     timestamp: str,
-    signup_mode: Literal["Open", "Role"] #, "Invite"],
+    duration: int,
+    signup_mode: Literal["Open", "Role"], #, "Invite"],
+    ping_roles: Literal["Yes", "No"] = "No",
+    message: str | None = None,
 ) -> None:
     ts = parse_unix_timestamp(timestamp)
     if ts is None:
         await send_invalid_timestamp(interaction)
         return
+    if duration <= 0:
+        await interaction.response.send_message("Duration must be greater than 0.", ephemeral=True)
+        return
+
+    ping_allowed_roles = ping_roles == "Yes"
+    announcement_message = normalize_announcement_message(message)
+
+    if signup_mode != "Role":
+        ping_allowed_roles = False
 
     if signup_mode == "Role":
         view = EventRolePickerView(
             title=title,
             category=category,
             timestamp=ts,
+            duration=duration,
             signup_mode=signup_mode,
             creator_id=interaction.user.id,
             guild_id=interaction.guild_id,
             channel_id=interaction.channel_id,
+            ping_roles=ping_allowed_roles,
+            announcement_message=announcement_message,
         )
         await interaction.response.send_message(
             "Select allowed roles (max 5):",
@@ -66,12 +90,15 @@ async def create_event(
                 creator_id,
                 title,
                 category,
+                duration,
                 signup_mode,
                 max_slots,
                 timestamp,
+                ping_roles,
+                announcement_message,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 interaction.guild_id,
@@ -79,9 +106,12 @@ async def create_event(
                 interaction.user.id,
                 title,
                 category,
+                duration,
                 signup_mode.lower(),
                 max_slots,
                 ts,
+                int(ping_allowed_roles),
+                announcement_message,
                 now_ts,
             ),
         )
@@ -95,6 +125,7 @@ async def create_event(
         title=title,
         category=category,
         timestamp=ts,
+        duration=duration,
         signup_mode=signup_mode,
         max_slots=default_max_slots(category),
         creator_id=interaction.user.id,
@@ -104,7 +135,22 @@ async def create_event(
     )
 
     view = SignupView(event_id)
-    await interaction.response.send_message(embed=embed, view=view)
+    content = build_event_announcement_content(
+        ping_roles=ping_allowed_roles,
+        allowed_role_ids=None,
+        message=announcement_message,
+    )
+    allowed_mentions = discord.AllowedMentions(
+        roles=ping_allowed_roles,
+        users=False,
+        everyone=False,
+    )
+    await interaction.response.send_message(
+        content=content,
+        embed=embed,
+        view=view,
+        allowed_mentions=allowed_mentions,
+    )
 
     msg = await interaction.original_response()
     await msg.create_thread(name=f"{title} Discussion")
@@ -116,7 +162,10 @@ async def create_event(
     category="Event type",
     frequency="daily or weekly",
     time="Use @time to pick a timestamp (e. g. @time -> Enter -> 22:15 -> Enter)",
+    duration="Planned duration (in hours) shown in each signup embed",
     signup_mode="Restrictions for users to sign up",
+    ping_roles="Ping the allowed roles in each scheduled event post",
+    message="Optional text shown above each scheduled signup embed",
     start_date="Use @time to pick a timestamp for your starting date of your schedule (defaults to instantly)",
     end_date="Use @time to pick a timestamp for your ending date of your schedule.",
 )
@@ -126,16 +175,28 @@ async def create_schedule(
     category: Literal["Raids", "Dungeons", "Fractals", "Other"],
     frequency: Literal["daily", "weekly"],
     time: str,
+    duration: int,
     signup_mode: Literal["Open", "Role"], #", Invite"],
+    ping_roles: Literal["Yes", "No"] = "No",
+    message: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> None:
+    ping_allowed_roles = ping_roles == "Yes"
+    announcement_message = normalize_announcement_message(message)
+
+    if signup_mode != "Role":
+        ping_allowed_roles = False
+
     view = ScheduleIntervalView(
         title=title,
         category=category,
         frequency=frequency,
         time=time,
+        duration=duration,
         signup_mode=signup_mode,
+        ping_roles=ping_allowed_roles,
+        announcement_message=announcement_message,
         start_date=start_date,
         end_date=end_date
     )
@@ -198,9 +259,12 @@ edit = app_commands.Group(name="edit", description="Edit things")
     interval="New interval (1, 2, 3...)",
     day_of_week="0=Mon ... 6=Sun (weekly only)",
     time="Unix timestamp (@time)",
+    duration="Planned duration (in hours) shown in each signup embed",
     start_date="Unix timestamp (@time)",
     end_date="Unix timestamp (@time)",
     signup_mode="Open/Role/Invite",
+    ping_roles="Ping the allowed roles in each scheduled event post",
+    message="Optional text shown above each scheduled signup embed",
 )
 async def edit_schedule(
     interaction: discord.Interaction,
@@ -211,9 +275,12 @@ async def edit_schedule(
     interval: int | None = None,
     day_of_week: int | None = None,
     time: str | None = None,
+    duration: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     signup_mode: Literal["Open", "Role"] | None = None, #, "Invite"]
+    ping_roles: Literal["Yes", "No"] | None = None,
+    message: str | None = None,
 ) -> None:
     conn = get_connection()
     try:
@@ -240,7 +307,23 @@ async def edit_schedule(
         new_frequency = frequency if frequency is not None else row["frequency"]
         new_interval = interval if interval is not None else row["interval"]
         new_day_of_week = day_of_week if day_of_week is not None else row["day_of_week"]
+        new_duration = duration if duration is not None else row["duration"]
         new_signup_mode = (signup_mode or row["signup_mode"] or "open").lower()
+        new_ping_roles = bool(row["ping_roles"])
+        if ping_roles is not None:
+            new_ping_roles = ping_roles == "Yes"
+        new_announcement_message = (
+            normalize_announcement_message(message)
+            if message is not None
+            else row["announcement_message"]
+        )
+
+        if new_duration is not None and new_duration <= 0:
+            await interaction.response.send_message("Duration must be greater than 0.", ephemeral=True)
+            return
+
+        if new_signup_mode != "role":
+            new_ping_roles = False
 
         # parse timestamps
         new_time_ts = row["time_of_day"]
@@ -296,10 +379,13 @@ async def edit_schedule(
                 interval_value=new_interval,
                 day_of_week=new_day_of_week,
                 time_ts=new_time_ts,
+                duration=new_duration,
                 start_ts=new_start_ts,
                 end_ts=new_end_ts,
                 next_run_at=first_run_at,
                 signup_mode=new_signup_mode,
+                ping_roles=new_ping_roles,
+                announcement_message=new_announcement_message,
             )
             await interaction.response.send_message(
                 "Select allowed roles (max 5):",
@@ -318,9 +404,12 @@ async def edit_schedule(
                 interval = ?,
                 day_of_week = ?,
                 time_of_day = ?,
+                duration = ?,
                 start_date = ?,
                 end_date = ?,
                 signup_mode = ?,
+                ping_roles = ?,
+                announcement_message = ?,
                 next_run_at = ?
             WHERE id = ?
             """,
@@ -331,9 +420,12 @@ async def edit_schedule(
                 new_interval,
                 new_day_of_week,
                 new_time_ts,
+                new_duration,
                 new_start_ts,
                 new_end_ts,
                 new_signup_mode,
+                int(new_ping_roles),
+                new_announcement_message,
                 first_run_at,
                 id,
             ),

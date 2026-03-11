@@ -8,6 +8,7 @@ from helpers import (
     user_has_allowed_role,
     get_allowed_role_ids,
     insert_schedule,
+    build_event_announcement_content,
 )
 
 from embeds import build_signup_embed
@@ -116,6 +117,7 @@ class SignupView(discord.ui.View):
             title=event["title"],
             category=event["category"],
             timestamp=event["timestamp"],
+            duration=event["duration"],
             signup_mode=event["signup_mode"],
             max_slots=event["max_slots"],
             creator_id=event["creator_id"],
@@ -205,19 +207,25 @@ class EventRolePickerView(discord.ui.View):
         title: str,
         category: str,
         timestamp: int,
+        duration: int,
         signup_mode: str,
         creator_id: int,
         guild_id: int,
         channel_id: int,
+        ping_roles: bool,
+        announcement_message: str | None,
     ):
         super().__init__(timeout=300)
         self.title = title
         self.category = category
         self.timestamp = timestamp
+        self.duration = duration
         self.signup_mode = signup_mode
         self.creator_id = creator_id
         self.guild_id = guild_id
         self.channel_id = channel_id
+        self.ping_roles = ping_roles
+        self.announcement_message = announcement_message
         self.selected_role_ids: list[int] = []
 
     @discord.ui.select(
@@ -249,12 +257,15 @@ class EventRolePickerView(discord.ui.View):
                     creator_id,
                     title,
                     category,
+                    duration,
                     signup_mode,
                     max_slots,
                     timestamp,
+                    ping_roles,
+                    announcement_message,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     self.guild_id,
@@ -262,9 +273,12 @@ class EventRolePickerView(discord.ui.View):
                     self.creator_id,
                     self.title,
                     self.category,
+                    self.duration,
                     self.signup_mode.lower(),
                     max_slots,
                     self.timestamp,
+                    int(self.ping_roles),
+                    self.announcement_message,
                     now_ts,
                 ),
             )
@@ -285,6 +299,7 @@ class EventRolePickerView(discord.ui.View):
             title=self.title,
             category=self.category,
             timestamp=self.timestamp,
+            duration=self.duration,
             signup_mode=self.signup_mode,
             max_slots=default_max_slots(self.category),
             creator_id=self.creator_id,
@@ -298,7 +313,22 @@ class EventRolePickerView(discord.ui.View):
             channel = await interaction.client.fetch_channel(self.channel_id)
 
         view = SignupView(event_id)
-        await channel.send(embed=embed, view=view)
+        content = build_event_announcement_content(
+            ping_roles=self.ping_roles,
+            allowed_role_ids=self.selected_role_ids,
+            message=self.announcement_message,
+        )
+        message = await channel.send(
+            content=content,
+            embed=embed,
+            view=view,
+            allowed_mentions=discord.AllowedMentions(
+                roles=self.ping_roles,
+                users=False,
+                everyone=False,
+            ),
+        )
+        await message.create_thread(name=f"{self.title} Discussion")
         await interaction.response.edit_message(content="Event created.", view=None)
 
 
@@ -310,7 +340,10 @@ class ScheduleIntervalView(discord.ui.View):
         category: str,
         frequency: str,
         time: str,
+        duration: int,
         signup_mode: str,
+        ping_roles: bool,
+        announcement_message: str | None,
         start_date: str | None,
         end_date: str | None
     ):
@@ -319,7 +352,10 @@ class ScheduleIntervalView(discord.ui.View):
         self.category = category
         self.frequency = frequency
         self.time = time
+        self.duration = duration
         self.signup_mode = signup_mode
+        self.ping_roles = ping_roles
+        self.announcement_message = announcement_message
         self.start_date = start_date
         self.end_date = end_date
         self.interval_value: int | None = None
@@ -420,12 +456,15 @@ class ScheduleIntervalView(discord.ui.View):
                 interval_value=self.interval_value,
                 day_of_week=self.day_of_week,
                 time_ts=time_ts,
+                duration=self.duration,
                 start_ts=start_ts,
                 end_ts=end_ts,
                 first_run_at=first_run_at,
                 creator_id=interaction.user.id,
                 guild_id=interaction.guild_id,
                 channel_id=interaction.channel_id,
+                ping_roles=self.ping_roles,
+                announcement_message=self.announcement_message,
             )
 
             await interaction.response.edit_message(
@@ -445,8 +484,11 @@ class ScheduleIntervalView(discord.ui.View):
             start_ts=start_ts,
             end_ts=end_ts,
             next_run_at=first_run_at,
+            duration=self.duration,
             signup_mode=self.signup_mode,
             allowed_role_ids=None,
+            ping_roles=self.ping_roles,
+            announcement_message=self.announcement_message,
         )
         await interaction.response.edit_message(content="Schedule created.", view=None)
 
@@ -461,12 +503,15 @@ class ScheduleRolePickerView(discord.ui.View):
         interval_value: int,
         day_of_week: int | None,
         time_ts: int,
+        duration: int,
         start_ts: int,
         end_ts: int | None,
         first_run_at: int,
         creator_id: int,
         guild_id: int,
-        channel_id: int
+        channel_id: int,
+        ping_roles: bool,
+        announcement_message: str | None,
     ):
         super().__init__(timeout=300)
         self.title = title
@@ -475,12 +520,15 @@ class ScheduleRolePickerView(discord.ui.View):
         self.interval_value = interval_value
         self.day_of_week = day_of_week
         self.time_ts = time_ts
+        self.duration = duration
         self.start_ts = start_ts
         self.end_ts = end_ts
         self.first_run_at = first_run_at
         self.creator_id = creator_id
         self.guild_id = guild_id
         self.channel_id = channel_id
+        self.ping_roles = ping_roles
+        self.announcement_message = announcement_message
         self.selected_role_ids: list[int] = []
 
     @discord.ui.select(
@@ -510,8 +558,11 @@ class ScheduleRolePickerView(discord.ui.View):
             start_ts=self.start_ts,
             end_ts=self.end_ts,
             next_run_at=self.first_run_at,
+            duration=self.duration,
             signup_mode="Role",
             allowed_role_ids=self.selected_role_ids,
+            ping_roles=self.ping_roles,
+            announcement_message=self.announcement_message,
         )
 
         await interaction.response.edit_message(content="Schedule created.", view=None)
@@ -528,10 +579,13 @@ class ScheduleEditRolePickerView(discord.ui.View):
         interval_value: int,
         day_of_week: int | None,
         time_ts: int,
+        duration: int | None,
         start_ts: int | None,
         end_ts: int | None,
         next_run_at: int,
         signup_mode: str,
+        ping_roles: bool,
+        announcement_message: str | None,
     ):
         super().__init__(timeout=300)
         self.schedule_id = schedule_id
@@ -541,10 +595,13 @@ class ScheduleEditRolePickerView(discord.ui.View):
         self.interval_value = interval_value
         self.day_of_week = day_of_week
         self.time_ts = time_ts
+        self.duration = duration
         self.start_ts = start_ts
         self.end_ts = end_ts
         self.next_run_at = next_run_at
         self.signup_mode = signup_mode
+        self.ping_roles = ping_roles
+        self.announcement_message = announcement_message
         self.selected_role_ids: list[int] = []
 
     @discord.ui.select(
@@ -574,9 +631,12 @@ class ScheduleEditRolePickerView(discord.ui.View):
                     interval = ?,
                     day_of_week = ?,
                     time_of_day = ?,
+                    duration = ?,
                     start_date = ?,
                     end_date = ?,
                     signup_mode = ?,
+                    ping_roles = ?,
+                    announcement_message = ?,
                     next_run_at = ?
                 WHERE id = ?
                 """,
@@ -587,9 +647,12 @@ class ScheduleEditRolePickerView(discord.ui.View):
                     self.interval_value,
                     self.day_of_week,
                     self.time_ts,
+                    self.duration,
                     self.start_ts,
                     self.end_ts,
                     self.signup_mode,
+                    int(self.ping_roles),
+                    self.announcement_message,
                     self.next_run_at,
                     self.schedule_id,
                 ),

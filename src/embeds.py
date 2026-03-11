@@ -8,6 +8,7 @@ async def build_signup_embed(
     title: str,
     category: str,
     timestamp: int,
+    duration: int | None,
     signup_mode: str,
     max_slots: int,
     creator_id: int,
@@ -41,6 +42,7 @@ async def build_signup_embed(
             f"**Category:** {category}\n"
             f"**Signup-Mode:** {(signup_mode or 'open').capitalize()}\n"
             f"**Date:** <t:{timestamp}:F>\n"
+            f"**Duration:** {duration if duration is not None else '-'} hours\n"
             f"**Signups:** {len(available)}/{max_slots}"
         ),
         color=discord.Color.blurple(),
